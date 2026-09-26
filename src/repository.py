@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from .domain import ConflictError, NotFoundError
@@ -18,6 +19,19 @@ class SQLiteRepository:
         connection = sqlite3.connect(self.path, timeout=30)
         connection.row_factory = sqlite3.Row
         return connection
+
+    @contextmanager
+    def transaction(self):
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def _initialize(self):
         with self._connect() as connection:
@@ -54,6 +68,33 @@ class SQLiteRepository:
                     created_at TEXT NOT NULL,
                     PRIMARY KEY(actor_id, idem_key)
                 );
+                CREATE TABLE IF NOT EXISTS locations (
+                    code TEXT PRIMARY KEY,
+                    name TEXT NOT NULL DEFAULT '',
+                    zone TEXT NOT NULL DEFAULT '',
+                    registered_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS location_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    location_code TEXT NOT NULL,
+                    consignment_id TEXT NOT NULL,
+                    consignment_code TEXT NOT NULL DEFAULT '',
+                    event TEXT NOT NULL,
+                    disposal_method TEXT NOT NULL DEFAULT '',
+                    reason TEXT NOT NULL DEFAULT '',
+                    actor_id TEXT NOT NULL,
+                    actor_role TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_location_events_code
+                    ON location_events(location_code, id);
+                CREATE INDEX IF NOT EXISTS idx_location_events_consignment
+                    ON location_events(consignment_id, id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_location_open_code
+                    ON location_events(location_code) WHERE event = 'occupied';
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_location_open_consignment
+                    ON location_events(consignment_id) WHERE event = 'occupied';
             """)
 
     @staticmethod
@@ -111,34 +152,174 @@ class SQLiteRepository:
         ]
 
     def update_entity(self, entity_id, expected_version, status, data):
+        with self.transaction() as connection:
+            self._update_entity_on(connection, entity_id, expected_version, status, data)
+        return self.get_entity(entity_id)
+
+    @staticmethod
+    def _update_entity_on(connection, entity_id, expected_version, status, data):
         now = utcnow()
         payload = json.dumps(data, ensure_ascii=False, sort_keys=True)
-        connection = self._connect()
-        try:
-            connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                "SELECT version FROM entities WHERE id = ?", (entity_id,)
-            ).fetchone()
-            if not row:
-                raise NotFoundError("entity not found: " + entity_id)
-            current_version = int(row["version"])
-            if expected_version is not None and current_version != int(expected_version):
-                raise ConflictError(
-                    "version conflict: expected %s, found %s"
-                    % (expected_version, current_version)
-                )
-            connection.execute(
-                "UPDATE entities SET status = ?, version = version + 1, data = ?, updated_at = ? "
-                "WHERE id = ? AND version = ?",
-                (status, payload, now, entity_id, current_version),
+        row = connection.execute(
+            "SELECT version FROM entities WHERE id = ?", (entity_id,)
+        ).fetchone()
+        if not row:
+            raise NotFoundError("entity not found: " + entity_id)
+        current_version = int(row["version"])
+        if expected_version is not None and current_version != int(expected_version):
+            raise ConflictError(
+                "version conflict: expected %s, found %s"
+                % (expected_version, current_version)
             )
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
-        return self.get_entity(entity_id)
+        connection.execute(
+            "UPDATE entities SET status = ?, version = version + 1, data = ?, updated_at = ? "
+            "WHERE id = ? AND version = ?",
+            (status, payload, now, entity_id, current_version),
+        )
+
+    # ----- 库位（隔离棚格位）-----
+
+    @staticmethod
+    def _location_from_row(row):
+        return {
+            "code": row["code"],
+            "name": row["name"],
+            "zone": row["zone"],
+            "registered_by": row["registered_by"],
+            "created_at": row["created_at"],
+        }
+
+    @staticmethod
+    def _location_event_from_row(row):
+        return {
+            "id": row["id"],
+            "location_code": row["location_code"],
+            "consignment_id": row["consignment_id"],
+            "consignment_code": row["consignment_code"],
+            "event": row["event"],
+            "disposal_method": row["disposal_method"],
+            "reason": row["reason"],
+            "actor_id": row["actor_id"],
+            "actor_role": row["actor_role"],
+            "created_at": row["created_at"],
+        }
+
+    def register_location(self, code, name, zone, actor_id):
+        now = utcnow()
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    "INSERT INTO locations(code, name, zone, registered_by, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (code, name, zone, actor_id, now),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise ConflictError("location already registered: " + code) from exc
+        return self.get_location(code)
+
+    def get_location(self, code):
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM locations WHERE code = ?", (code,)
+            ).fetchone()
+        return self._location_from_row(row) if row else None
+
+    def list_locations(self):
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM locations ORDER BY code"
+            ).fetchall()
+            open_rows = connection.execute(
+                "SELECT * FROM location_events WHERE event = 'occupied'"
+            ).fetchall()
+        occupancy = {
+            row["location_code"]: self._location_event_from_row(row)
+            for row in open_rows
+        }
+        locations = []
+        for row in rows:
+            location = self._location_from_row(row)
+            event = occupancy.get(row["code"])
+            location["status"] = "occupied" if event else "free"
+            location["occupancy"] = event
+            locations.append(location)
+        return locations
+
+    def get_open_occupancy(self, consignment_id=None, location_code=None):
+        clauses = ["event = 'occupied'"]
+        params = []
+        if consignment_id is not None:
+            clauses.append("consignment_id = ?")
+            params.append(consignment_id)
+        if location_code is not None:
+            clauses.append("location_code = ?")
+            params.append(location_code)
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM location_events WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY id",
+                params,
+            ).fetchone()
+        return self._location_event_from_row(row) if row else None
+
+    def occupy_location(
+        self, connection, location_code, consignment_id, consignment_code,
+        disposal_method, actor,
+    ):
+        if connection.execute(
+            "SELECT 1 FROM locations WHERE code = ?", (location_code,)
+        ).fetchone() is None:
+            raise NotFoundError("location not registered: " + location_code)
+        existing_batch = connection.execute(
+            "SELECT location_code FROM location_events "
+            "WHERE event = 'occupied' AND consignment_id = ?",
+            (consignment_id,),
+        ).fetchone()
+        if existing_batch:
+            return False, self._location_event_from_row(existing_batch)
+        now = utcnow()
+        try:
+            cursor = connection.execute(
+                "INSERT INTO location_events(location_code, consignment_id, consignment_code, "
+                "event, disposal_method, reason, actor_id, actor_role, created_at) "
+                "VALUES (?, ?, ?, 'occupied', ?, '', ?, ?, ?)",
+                (
+                    location_code, consignment_id, consignment_code,
+                    disposal_method, actor.user_id, actor.role, now,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ConflictError(
+                "location already occupied: " + location_code
+            ) from exc
+        row = connection.execute(
+            "SELECT * FROM location_events WHERE id = ?", (cursor.lastrowid,)
+        ).fetchone()
+        return True, self._location_event_from_row(row)
+
+    def release_location(self, connection, consignment_id, reason, actor):
+        row = connection.execute(
+            "SELECT * FROM location_events WHERE event = 'occupied' AND consignment_id = ?",
+            (consignment_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        occupied = self._location_event_from_row(row)
+        now = utcnow()
+        connection.execute(
+            "UPDATE location_events SET event = 'released', reason = ?, actor_id = ?, "
+            "actor_role = ?, created_at = ? WHERE id = ?",
+            (reason, actor.user_id, actor.role, now, row["id"]),
+        )
+        return occupied
+
+    def list_location_events(self):
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM location_events ORDER BY id"
+            ).fetchall()
+        return [self._location_event_from_row(row) for row in rows]
 
     def append_audit(self, entity_id, actor_id, actor_role, action, from_status, to_status, detail):
         with self._connect() as connection:

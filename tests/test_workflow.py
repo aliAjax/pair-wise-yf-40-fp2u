@@ -32,8 +32,14 @@ class WorkflowTest(unittest.TestCase):
 
     def test_full_workflow(self):
         created = {}
-        steps = [{'op': 'create', 'as': 'consignment', 'kind': 'consignment', 'data': {'code': 'C-1', 'origin': 'Port-A', 'destination': 'Farm-B'}}, {'op': 'transition', 'target': 'consignment', 'action': 'inspect', 'data': {'inspector': 'I-1', 'inspection_result': 'suspected'}, 'expect': 'inspected'}, {'op': 'transition', 'target': 'consignment', 'action': 'quarantine', 'data': {'pest_found': True, 'sample_id': 'S-1'}, 'expect': 'quarantined'}, {'op': 'transition', 'target': 'consignment', 'action': 'destroy', 'data': {'method': 'incineration', 'witnessed_by': 'W-1'}, 'expect': 'destroyed'}, {'op': 'create', 'as': 'facility', 'kind': 'facility', 'data': {'name': 'Farm-B', 'address': 'County 1'}}, {'op': 'transition', 'target': 'facility', 'action': 'trace', 'data': {'consignment_ids': ['{consignment}']}, 'expect': 'traced'}]
+        steps = [{'op': 'create', 'as': 'consignment', 'kind': 'consignment', 'data': {'code': 'C-1', 'origin': 'Port-A', 'destination': 'Farm-B'}}, {'op': 'register_location', 'code': 'A-01'}, {'op': 'transition', 'target': 'consignment', 'action': 'inspect', 'data': {'inspector': 'I-1', 'inspection_result': 'suspected'}, 'expect': 'inspected'}, {'op': 'transition', 'target': 'consignment', 'action': 'quarantine', 'data': {'pest_found': True, 'sample_id': 'S-1', 'location_code': 'A-01', 'disposal_method': 'incineration'}, 'expect': 'quarantined'}, {'op': 'transition', 'target': 'consignment', 'action': 'destroy', 'data': {'method': 'incineration', 'witnessed_by': 'W-1'}, 'expect': 'destroyed'}, {'op': 'create', 'as': 'facility', 'kind': 'facility', 'data': {'name': 'Farm-B', 'address': 'County 1'}}, {'op': 'transition', 'target': 'facility', 'action': 'trace', 'data': {'consignment_ids': ['{consignment}']}, 'expect': 'traced'}]
         for step in steps:
+            if step["op"] == "register_location":
+                self.service.register_location(
+                    self.actor,
+                    {"code": step["code"], "name": "隔离格 " + step["code"]},
+                )
+                continue
             if step["op"] == "create":
                 entity = self.service.create(
                     self.actor,

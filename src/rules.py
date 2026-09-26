@@ -8,6 +8,9 @@ from .domain import (
 )
 
 
+DISPOSAL_METHODS = ("incineration", "deep_burial", "sterilization", "chemical")
+
+
 def _validate_consignment(actor, data, lookup):
     if data.get("origin") == data.get("destination"):
         raise ValidationError("origin and destination must differ")
@@ -16,6 +19,14 @@ def _validate_consignment(actor, data, lookup):
 def _validate_quarantine(actor, entity, data, lookup):
     if not data.get("pest_found"):
         raise ValidationError("pest_found must be true for quarantine")
+    if data.get("disposal_method") not in DISPOSAL_METHODS:
+        raise ValidationError(
+            "disposal_method must be one of: " + ", ".join(DISPOSAL_METHODS)
+        )
+    location_code = str(data.get("location_code") or "").strip()
+    if not location_code:
+        raise ValidationError("missing required field: location_code")
+    data["location_code"] = location_code
     return {"quarantined_by": actor.user_id}
 
 
@@ -43,6 +54,15 @@ def trace_downstream(consignments, start_id):
     return result
 
 
+def _validate_location(actor, data, lookup):
+    code = str(data.get("code") or "").strip()
+    if not code:
+        raise ValidationError("missing required field: code")
+    normalized = dict(data)
+    normalized["code"] = code
+    return normalized
+
+
 CUSTOM_CREATE = {'consignment': _validate_consignment}
 CUSTOM_TRANSITIONS = {('consignment', 'quarantine'): _validate_quarantine, ('consignment', 'release'): _validate_release}
 
@@ -55,6 +75,8 @@ class RuleEngine:
     ACTION_REQUIRED = {('consignment', 'inspect'): ('inspector', 'inspection_result'), ('consignment', 'quarantine'): ('pest_found', 'sample_id'), ('consignment', 'release'): ('pest_found', 'treatment'), ('consignment', 'destroy'): ('method', 'witnessed_by'), ('consignment', 'recheck'): ('sample_id',), ('facility', 'trace'): ('consignment_ids',)}
     CREATE_ROLES = {'consignment': ('admin', 'inspector'), 'facility': ('admin', 'quarantine')}
     ROLE_ACTIONS = {'inspect': ('admin', 'inspector'), 'quarantine': ('admin', 'quarantine'), 'release': ('admin', 'quarantine'), 'destroy': ('admin', 'quarantine'), 'recheck': ('admin', 'inspector'), 'trace': ('admin', 'quarantine')}
+    LOCATION_ROLES = ('admin', 'quarantine')
+    LOCATION_REQUIRED = ('code',)
 
     def normalize_kind(self, kind):
         return self.ALIASES.get(kind, kind)
@@ -64,6 +86,12 @@ class RuleEngine:
         if kind not in self.INITIAL_STATUS:
             raise ValidationError("unknown kind: " + str(kind))
         return self.INITIAL_STATUS[kind]
+
+    def validate_location_registration(self, actor, data):
+        """库位登记：处置调度台专属，不进入实体状态机。"""
+        self._ensure_role(actor, self.LOCATION_ROLES)
+        self._require(data, self.LOCATION_REQUIRED)
+        return _validate_location(actor, dict(data or {}), None)
 
     @staticmethod
     def _ensure_role(actor, allowed):

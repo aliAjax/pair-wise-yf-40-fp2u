@@ -85,6 +85,22 @@ def create_handler(service, rules, static_dir):
                         return self._send_html(200, handle.read())
                 if parts == ["api", "audit"]:
                     return self._send(200, {"items": service.audit_log()})
+                if parts == ["api", "locations"]:
+                    return self._send(
+                        200,
+                        {"items": service.list_locations()},
+                    )
+                if parts == ["api", "location-events"]:
+                    return self._send(
+                        200,
+                        {"items": service.location_events()},
+                    )
+                if parts == ["api", "dispatch-board"]:
+                    return self._send(200, {
+                        "locations": service.list_locations(),
+                        "consignments": service.list("consignment"),
+                        "events": service.location_events(),
+                    })
                 if len(parts) == 3 and parts[:2] == ["api", "entities"]:
                     return self._send(200, service.get(parts[2]))
                 if len(parts) >= 2 and parts[0] == "api":
@@ -107,6 +123,11 @@ def create_handler(service, rules, static_dir):
                 parsed = urlparse(self.path)
                 parts = [part for part in parsed.path.split("/") if part]
                 actor = self._actor()
+                if parts == ["api", "locations"]:
+                    return self._send(
+                        201,
+                        service.register_location(actor, self._body()),
+                    )
                 if len(parts) == 3 and parts[:2] == ["api", "entities"]:
                     body = self._body()
                     action = body.pop("action", None)
