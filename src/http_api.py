@@ -85,6 +85,18 @@ def create_handler(service, rules, static_dir):
                         return self._send_html(200, handle.read())
                 if parts == ["api", "audit"]:
                     return self._send(200, {"items": service.audit_log()})
+                if parts == ["api", "slots"]:
+                    return self._send(200, {"items": service.list_slots()})
+                if parts == ["api", "slot-history"]:
+                    query = parse_qs(parsed.query)
+                    slot_id = query.get("slot_id", [None])[0]
+                    return self._send(200, {"items": service.slot_history(slot_id)})
+                if len(parts) == 4 and parts[:2] == ["api", "slots"] and parts[3] == "history":
+                    return self._send(
+                        200, {"items": service.slot_history(parts[2])}
+                    )
+                if len(parts) == 3 and parts[:2] == ["api", "slots"]:
+                    return self._send(200, service.get_slot(parts[2]))
                 if len(parts) == 3 and parts[:2] == ["api", "entities"]:
                     return self._send(200, service.get(parts[2]))
                 if len(parts) >= 2 and parts[0] == "api":

@@ -3,32 +3,535 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>植物病虫害检疫与传播追溯</title>
+  <title>染病批次处置调度台</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #1f2937; }
-    main { max-width: 820px; margin: auto; }
-    pre { background: #f3f4f6; padding: 1rem; border-radius: 8px; overflow-x: auto; }
-    button { padding: .5rem .8rem; cursor: pointer; }
+    :root {
+      --bg: #f3f4f6; --card: #ffffff; --ink: #1f2937; --muted: #6b7280;
+      --line: #e5e7eb; --ok: #16a34a; --ok-bg: #dcfce7;
+      --busy: #dc2626; --busy-bg: #fee2e2; --accent: #2563eb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Microsoft YaHei", sans-serif;
+      margin: 0; background: var(--bg); color: var(--ink);
+    }
+    header {
+      background: #111827; color: #fff; padding: .9rem 1.2rem;
+      display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+    }
+    header h1 { font-size: 1.05rem; margin: 0; margin-right: auto; }
+    header label { font-size: .85rem; color: #d1d5db; }
+    header input, header select {
+      padding: .3rem .5rem; border-radius: 6px; border: 1px solid #4b5563;
+      background: #1f2937; color: #fff;
+    }
+    main { max-width: 1100px; margin: 1.2rem auto; padding: 0 1rem 3rem; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+    section.card {
+      background: var(--card); border: 1px solid var(--line);
+      border-radius: 10px; padding: 1rem 1.1rem; margin-bottom: 1rem;
+    }
+    h2 { font-size: 1rem; margin: 0 0 .8rem; display: flex; align-items: center; gap: .6rem; }
+    h2 .count { font-weight: 400; color: var(--muted); font-size: .8rem; }
+    form.inline { display: flex; gap: .5rem; flex-wrap: wrap; align-items: flex-end; }
+    label.field { display: flex; flex-direction: column; gap: .25rem; font-size: .8rem; color: var(--muted); }
+    input, select, textarea {
+      padding: .4rem .55rem; border: 1px solid #d1d5db; border-radius: 6px;
+      font-size: .9rem; background: #fff; color: var(--ink);
+    }
+    button {
+      padding: .45rem .85rem; border: 0; border-radius: 6px; cursor: pointer;
+      font-size: .85rem; background: var(--accent); color: #fff;
+    }
+    button.ghost { background: #e5e7eb; color: #374151; }
+    button.danger { background: var(--busy); }
+    button.safe { background: var(--ok); }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: .6rem; }
+    .slot {
+      border: 1px solid var(--line); border-radius: 8px; padding: .6rem .7rem;
+      font-size: .82rem; background: #fafafa;
+    }
+    .slot.available { border-color: #86efac; background: var(--ok-bg); }
+    .slot.occupied { border-color: #fca5a5; background: var(--busy-bg); }
+    .slot .code { font-weight: 700; font-size: .95rem; }
+    .badge {
+      display: inline-block; padding: .1rem .5rem; border-radius: 999px;
+      font-size: .72rem; font-weight: 600;
+    }
+    .badge.available { background: var(--ok); color: #fff; }
+    .badge.occupied { background: var(--busy); color: #fff; }
+    .slot .meta { color: #374151; margin-top: .35rem; line-height: 1.5; }
+    table { width: 100%; border-collapse: collapse; font-size: .83rem; }
+    th, td { text-align: left; padding: .45rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; background: #f9fafb; position: sticky; top: 0; }
+    .status { font-weight: 600; }
+    .s-declared { color: #92400e; }
+    .s-inspected { color: #1d4ed8; }
+    .s-quarantined { color: var(--busy); }
+    .s-released { color: var(--ok); }
+    .s-destroyed { color: #6b7280; }
+    .s-traced { color: #6b7280; }
+    .actions { display: flex; gap: .35rem; flex-wrap: wrap; margin-top: .35rem; }
+    .actions button { padding: .3rem .6rem; font-size: .78rem; }
+    .action-form {
+      margin-top: .5rem; padding: .6rem; border: 1px dashed #cbd5e1;
+      border-radius: 8px; background: #f8fafc;
+    }
+    .action-form form { display: flex; gap: .5rem; flex-wrap: wrap; align-items: flex-end; }
+    #message {
+      position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%);
+      max-width: 90vw; padding: .6rem 1rem; border-radius: 8px; font-size: .85rem;
+      display: none; box-shadow: 0 4px 14px rgba(0,0,0,.18); z-index: 10;
+    }
+    #message.ok { background: #dcfce7; color: #166534; display: block; }
+    #message.err { background: #fee2e2; color: #991b1b; display: block; }
+    #message.info { background: #dbeafe; color: #1e40af; display: block; }
+    .muted { color: var(--muted); font-size: .78rem; }
+    .tag-assign { color: #b45309; font-weight: 600; }
+    .tag-release { color: var(--ok); font-weight: 600; }
   </style>
 </head>
 <body>
+<header>
+  <h1>染病批次处置调度台</h1>
+  <label>操作人 <input id="user-id" value="quarantine-01" size="14"></label>
+  <label>角色
+    <select id="role">
+      <option value="admin">管理员 admin</option>
+      <option value="quarantine" selected>隔离处置员 quarantine</option>
+      <option value="inspector">检疫员 inspector</option>
+      <option value="viewer">只读 viewer</option>
+    </select>
+  </label>
+  <button class="ghost" type="button" onclick="loadAll()">刷新</button>
+</header>
+
 <main>
-  <h1>植物病虫害检疫与传播追溯</h1>
-  <p>这是最小演示页面。使用浏览器或 curl 调用 JSON API。</p>
-  <p><button onclick="checkHealth()">检查服务状态</button></p>
-  <pre id="result">等待操作</pre>
-  <h2>常用接口</h2>
-  <pre>GET  /health
-GET  /api/&lt;kind&gt;
-POST /api/&lt;kind&gt;
-GET  /api/entities/&lt;id&gt;
-POST /api/entities/&lt;id&gt;/actions</pre>
+  <div class="grid">
+    <section class="card">
+      <h2>① 登记库位 <span class="count">先把隔离棚格位录入系统</span></h2>
+      <form class="inline" onsubmit="return submitSlot(event)">
+        <label class="field">库位编号
+          <input id="slot-code" required placeholder="如 A-01" size="12">
+        </label>
+        <label class="field">分区/备注
+          <input id="slot-zone" placeholder="如 1号隔离棚" size="14">
+        </label>
+        <button type="submit">登记</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>③ 批次申报 <span class="count">染病批次先进检疫流程</span></h2>
+      <form class="inline" onsubmit="return submitConsignment(event)">
+        <label class="field">批次号
+          <input id="c-code" required placeholder="如 C-2026-01" size="13">
+        </label>
+        <label class="field">来源
+          <input id="c-origin" required placeholder="起运地" size="10">
+        </label>
+        <label class="field">目的地
+          <input id="c-destination" required placeholder="种植点" size="10">
+        </label>
+        <button type="submit">申报</button>
+      </form>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>② 隔离棚库位图 <span class="count" id="slot-summary"></span></h2>
+    <div id="slots" class="slots"></div>
+  </section>
+
+  <section class="card">
+    <h2>③ 批次处置调度 <span class="count">转处置时选一格并记下处置方式；销毁或复检释放库位</span></h2>
+    <div style="overflow-x:auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>批次号</th><th>状态</th><th>库位 / 处置方式</th><th>版本</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="consignments"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>④ 库位台账 <span class="count">占用/释放原因与操作人留痕</span></h2>
+    <div style="overflow-x:auto; max-height: 320px; overflow-y: auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>时间</th><th>库位</th><th>动作</th><th>批次</th><th>处置方式</th><th>原因</th><th>操作人</th>
+          </tr>
+        </thead>
+        <tbody id="slot-history"></tbody>
+      </table>
+    </div>
+  </section>
 </main>
+
+<div id="message"></div>
+
 <script>
-async function checkHealth() {
-  const response = await fetch('/health');
-  document.getElementById('result').textContent = JSON.stringify(await response.json(), null, 2);
+const METHOD_LABELS = {
+  incineration: '焚烧',
+  deep_burial: '深埋',
+  sterilization: '灭菌处理',
+  chemical_treatment: '药剂处理',
+  return_to_origin: '退回原产地'
+};
+const STATUS_LABELS = {
+  declared: '已申报', inspected: '普通检疫中', quarantined: '隔离处置中',
+  released: '已放行', destroyed: '已销毁', traced: '已追溯'
+};
+let state = { slots: [], consignments: [], history: [], openForm: null };
+
+function headers() {
+  return {
+    'Content-Type': 'application/json',
+    'X-User-Id': document.getElementById('user-id').value || 'anonymous',
+    'X-Role': document.getElementById('role').value
+  };
 }
+
+function flash(text, kind) {
+  const el = document.getElementById('message');
+  el.textContent = text;
+  el.className = kind || 'ok';
+  clearTimeout(flash._t);
+  flash._t = setTimeout(() => { el.className = ''; }, 4000);
+}
+
+async function api(method, url, body) {
+  const response = await fetch(url, {
+    method,
+    headers: headers(),
+    body: body ? JSON.stringify(body) : undefined
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.error || ('HTTP ' + response.status));
+  }
+  return payload;
+}
+
+async function loadAll() {
+  try {
+    const [slots, consignments, history] = await Promise.all([
+      api('GET', '/api/slots'),
+      api('GET', '/api/consignments'),
+      api('GET', '/api/slot-history')
+    ]);
+    state.slots = slots.items || [];
+    state.consignments = (consignments.items || []).slice().reverse();
+    state.history = history.items || [];
+    renderSlots();
+    renderConsignments();
+    renderHistory();
+  } catch (err) {
+    flash('加载失败：' + err.message, 'err');
+  }
+}
+
+function fmtTime(value) {
+  if (!value) return '';
+  return value.replace('T', ' ').replace('+00:00', 'Z');
+}
+
+function esc(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function renderSlots() {
+  const occupied = state.slots.filter(s => s.status === 'occupied').length;
+  document.getElementById('slot-summary').textContent =
+    '共 ' + state.slots.length + ' 格，占用 ' + occupied + ' 格，空闲 ' +
+    (state.slots.length - occupied) + ' 格';
+  const el = document.getElementById('slots');
+  if (!state.slots.length) {
+    el.innerHTML = '<p class="muted">尚无库位，请先在上方登记。</p>';
+    return;
+  }
+  el.innerHTML = state.slots.map(s => `
+    <div class="slot ${s.status}">
+      <div><span class="code">${esc(s.code)}</span>
+        <span class="badge ${s.status}" style="float:right">
+          ${s.status === 'occupied' ? '占用中' : '空闲'}</span></div>
+      ${s.zone ? '<div class="muted">' + esc(s.zone) + '</div>' : ''}
+      <div class="meta">
+        ${s.status === 'occupied' ? `
+          批次：<b>${esc(s.consignment_code || s.consignment_id)}</b><br>
+          处置方式：${esc(METHOD_LABELS[s.disposal_method] || s.disposal_method)}<br>
+          占用人：${esc(s.occupied_by)}<br>
+          <span class="muted">${esc(fmtTime(s.occupied_at))}</span>`
+          : '<div class="muted" style="margin-top:.3rem">可安排染病批次</div>'}
+      </div>
+    </div>`).join('');
+}
+
+function slotOptions() {
+  return state.slots.map(s =>
+    `<option value="${esc(s.id)}" ${s.status === 'occupied' ? 'disabled' : ''}>
+      ${esc(s.code)}${s.status === 'occupied' ? '（占用中）' : '（空闲）'}
+    </option>`).join('');
+}
+
+function methodOptions(selected) {
+  return Object.keys(METHOD_LABELS).map(m =>
+    `<option value="${m}" ${m === selected ? 'selected' : ''}>${METHOD_LABELS[m]}</option>`
+  ).join('');
+}
+
+function actionFormHtml(id, action) {
+  if (action === 'inspect') {
+    return `<form onsubmit="return doAction(event,'${id}','inspect')">
+      <label class="field">检验结论
+        <input name="inspection_result" required placeholder="如 suspected / positive">
+      </label>
+      <label class="field">检疫员
+        <input name="inspector" required value="${esc(document.getElementById('user-id').value)}">
+      </label>
+      <button type="submit">提交检验</button>
+      <button type="button" class="ghost" onclick="closeForm('${id}')">取消</button>
+    </form>`;
+  }
+  if (action === 'quarantine') {
+    return `<form onsubmit="return doQuarantine(event,'${id}')">
+      <label class="field">选择库位
+        <select name="slot_id" required>
+          <option value="">请选择空闲格…</option>${slotOptions()}
+        </select>
+      </label>
+      <label class="field">处置方式
+        <select name="disposal_method" required>${methodOptions()}</select>
+      </label>
+      <label class="field">样品编号
+        <input name="sample_id" required placeholder="S-编号">
+      </label>
+      <input type="hidden" name="pest_found" value="true">
+      <button class="danger" type="submit">转处置并占格</button>
+      <button type="button" class="ghost" onclick="closeForm('${id}')">取消</button>
+    </form>
+    <p class="muted" style="margin:.4rem 0 0">确认染病（pest_found=true）。同格未清空前无法再安排；重复提交沿用原单。</p>`;
+  }
+  if (action === 'destroy') {
+    return `<form onsubmit="return doRelease(event,'${id}','destroy')">
+      <label class="field">处置方式（留空沿用原记录）
+        <select name="method"><option value="">沿用原单</option>${methodOptions()}</select>
+      </label>
+      <label class="field">见证人
+        <input name="witnessed_by" required placeholder="W-编号">
+      </label>
+      <label class="field">释放原因（可选）
+        <input name="reason" placeholder="如 焚烧完毕，灰烬深埋">
+      </label>
+      <button class="danger" type="submit">处置完成并释放</button>
+      <button type="button" class="ghost" onclick="closeForm('${id}')">取消</button>
+    </form>`;
+  }
+  if (action === 'recheck') {
+    return `<form onsubmit="return doRelease(event,'${id}','recheck')">
+      <label class="field">复检样品编号
+        <input name="sample_id" required placeholder="S-编号">
+      </label>
+      <label class="field">释放原因
+        <input name="reason" required placeholder="如 复检阴性，转回普通检疫">
+      </label>
+      <button class="safe" type="submit">复检通过并释放</button>
+      <button type="button" class="ghost" onclick="closeForm('${id}')">取消</button>
+    </form>`;
+  }
+  if (action === 'release') {
+    return `<form onsubmit="return doAction(event,'${id}','release')">
+      <label class="field">处置状态
+        <select name="treatment">
+          <option value="completed">completed 已完成处置</option>
+          <option value="certified">certified 已出证</option>
+          <option value="none">none 无需处置</option>
+        </select>
+      </label>
+      <input type="hidden" name="pest_found" value="false">
+      <button class="safe" type="submit">放行</button>
+      <button type="button" class="ghost" onclick="closeForm('${id}')">取消</button>
+    </form>`;
+  }
+  return '';
+}
+
+function closeForm(id) {
+  if (state.openForm === id) state.openForm = null;
+  renderConsignments();
+}
+
+function renderConsignments() {
+  const el = document.getElementById('consignments');
+  if (!state.consignments.length) {
+    el.innerHTML = '<tr><td colspan="5" class="muted">尚无批次。</td></tr>';
+    return;
+  }
+  el.innerHTML = state.consignments.map(c => {
+    const slotText = c.data.slot_code
+      ? esc(c.data.slot_code) + ' / ' + esc(METHOD_LABELS[c.data.disposal_method] || c.data.disposal_method || '')
+      : '<span class="muted">—</span>';
+    let buttons = '';
+    if (c.status === 'declared') {
+      buttons = '<button onclick="openForm(\'' + c.id + '\',\'inspect\')">检验</button>';
+    } else if (c.status === 'inspected') {
+      buttons =
+        '<button class="danger" onclick="openForm(\'' + c.id + '\',\'quarantine\')">转处置（占格）</button>' +
+        '<button class="safe" onclick="openForm(\'' + c.id + '\',\'release\')">放行</button>';
+    } else if (c.status === 'quarantined') {
+      buttons =
+        '<button class="danger" onclick="openForm(\'' + c.id + '\',\'destroy\')">处置完成</button>' +
+        '<button class="safe" onclick="openForm(\'' + c.id + '\',\'recheck\')">复检转回</button>';
+    }
+    const form = state.openForm === c.id
+      ? '<div class="action-form">' + actionFormHtml(c.id, openAction(c.id)) + '</div>'
+      : '';
+    return `<tr>
+      <td>${esc(c.data.code || c.id)}<br><span class="muted">${esc(c.id.slice(0, 8))}</span></td>
+      <td class="status s-${esc(c.status)}">${STATUS_LABELS[c.status] || c.status}</td>
+      <td>${slotText}</td>
+      <td>${c.version}</td>
+      <td><div class="actions">${buttons}</div>${form}</td>
+    </tr>`;
+  }).join('');
+}
+
+// 记录每个批次当前展开的动作
+const openActions = {};
+function openAction(id) { return openActions[id]; }
+function openForm(id, action) {
+  openActions[id] = action;
+  state.openForm = id;
+  renderConsignments();
+}
+
+function renderHistory() {
+  const el = document.getElementById('slot-history');
+  if (!state.history.length) {
+    el.innerHTML = '<tr><td colspan="7" class="muted">暂无台账记录。</td></tr>';
+    return;
+  }
+  el.innerHTML = state.history.map(h => `
+    <tr>
+      <td class="muted">${esc(fmtTime(h.created_at))}</td>
+      <td><b>${esc(h.slot_code)}</b></td>
+      <td class="tag-${h.action}">${h.action === 'assign' ? '占用' : '释放'}</td>
+      <td>${esc(h.consignment_code || h.consignment_id || '')}</td>
+      <td>${esc(h.disposal_method || '')}</td>
+      <td>${esc(h.reason || '')}</td>
+      <td>${esc(h.actor_id)}</td>
+    </tr>`).join('');
+}
+
+// ---- 提交 ----------------------------------------------------------------
+
+async function submitSlot(event) {
+  event.preventDefault();
+  const body = {
+    code: document.getElementById('slot-code').value.trim(),
+    zone: document.getElementById('slot-zone').value.trim()
+  };
+  try {
+    await api('POST', '/api/slots', body);
+    flash('库位 ' + body.code + ' 已登记', 'ok');
+    document.getElementById('slot-code').value = '';
+    document.getElementById('slot-zone').value = '';
+    await loadAll();
+  } catch (err) { flash('登记失败：' + err.message, 'err'); }
+  return false;
+}
+
+async function submitConsignment(event) {
+  event.preventDefault();
+  const body = {
+    code: document.getElementById('c-code').value.trim(),
+    origin: document.getElementById('c-origin').value.trim(),
+    destination: document.getElementById('c-destination').value.trim()
+  };
+  try {
+    await api('POST', '/api/consignments', body);
+    flash('批次 ' + body.code + ' 已申报', 'ok');
+    ['c-code', 'c-origin', 'c-destination'].forEach(i => document.getElementById(i).value = '');
+    await loadAll();
+  } catch (err) { flash('申报失败：' + err.message, 'err'); }
+  return false;
+}
+
+function formData(form) {
+  const result = {};
+  new FormData(form).forEach((v, k) => { result[k] = v; });
+  if (result.pest_found === 'true') result.pest_found = true;
+  if (result.pest_found === 'false') result.pest_found = false;
+  if (result.method === '') delete result.method;
+  if (result.reason === '') delete result.reason;
+  return result;
+}
+
+function findConsignment(id) {
+  return state.consignments.find(c => c.id === id);
+}
+
+async function doAction(event, id, action) {
+  event.preventDefault();
+  const current = findConsignment(id);
+  const body = { action, data: formData(event.target), expected_version: current.version };
+  try {
+    await api('POST', '/api/entities/' + encodeURIComponent(id) + '/actions', body);
+    state.openForm = null;
+    flash('操作已提交：' + action, 'ok');
+    await loadAll();
+  } catch (err) { flash('操作失败：' + err.message, 'err'); }
+  return false;
+}
+
+async function doQuarantine(event, id) {
+  event.preventDefault();
+  const current = findConsignment(id);
+  const body = {
+    action: 'quarantine',
+    data: formData(event.target),
+    expected_version: current.version
+  };
+  try {
+    const updated = await api(
+      'POST', '/api/entities/' + encodeURIComponent(id) + '/actions', body
+    );
+    state.openForm = null;
+    if (updated.version === current.version && updated.status === 'quarantined') {
+      flash('该批次已在隔离处置中，沿用原单（库位 ' +
+        (updated.data.slot_code || '') + '），未重复占格', 'info');
+    } else {
+      flash('已转处置，占用库位 ' + (updated.data.slot_code || ''), 'ok');
+    }
+    await loadAll();
+  } catch (err) { flash('转处置失败：' + err.message, 'err'); }
+  return false;
+}
+
+async function doRelease(event, id, action) {
+  event.preventDefault();
+  const current = findConsignment(id);
+  const body = { action, data: formData(event.target), expected_version: current.version };
+  try {
+    await api('POST', '/api/entities/' + encodeURIComponent(id) + '/actions', body);
+    state.openForm = null;
+    flash(action === 'destroy' ? '处置完成，库位已释放' : '复检通过，库位已释放', 'ok');
+    await loadAll();
+  } catch (err) { flash('操作失败：' + err.message, 'err'); }
+  return false;
+}
+
+loadAll();
+setInterval(loadAll, 5000);
 </script>
 </body>
 </html>

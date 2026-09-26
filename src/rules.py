@@ -3,9 +3,26 @@ from datetime import datetime, timedelta
 from .domain import (
     ConflictError,
     InvalidTransition,
+    NotFoundError,
     PermissionDenied,
     ValidationError,
 )
+
+
+DISPOSAL_METHODS = (
+    "incineration",      # 焚烧
+    "deep_burial",       # 深埋
+    "sterilization",     # 灭菌处理
+    "chemical_treatment",  # 药剂处理
+    "return_to_origin",  # 退回原产地
+)
+DISPOSAL_METHOD_LABELS = {
+    "incineration": "焚烧",
+    "deep_burial": "深埋",
+    "sterilization": "灭菌处理",
+    "chemical_treatment": "药剂处理",
+    "return_to_origin": "退回原产地",
+}
 
 
 def _validate_consignment(actor, data, lookup):
@@ -13,10 +30,58 @@ def _validate_consignment(actor, data, lookup):
         raise ValidationError("origin and destination must differ")
 
 
+def _validate_slot(actor, data, lookup):
+    code = data.get("code")
+    if lookup and lookup("slot", "code", code):
+        raise ConflictError("slot code already registered: " + str(code))
+    return dict(data)
+
+
 def _validate_quarantine(actor, entity, data, lookup):
     if not data.get("pest_found"):
         raise ValidationError("pest_found must be true for quarantine")
-    return {"quarantined_by": actor.user_id}
+    slot_id = data.get("slot_id")
+    method = data.get("disposal_method")
+    if method not in DISPOSAL_METHODS:
+        raise ValidationError("disposal_method must be one of: " + ",".join(DISPOSAL_METHODS))
+    slot = _find_one(lookup, "slot", "id", slot_id)
+    if not slot:
+        raise NotFoundError("slot not found: " + str(slot_id))
+    if slot["status"] == "occupied" and slot.get("consignment_id") != entity["id"]:
+        raise ConflictError(
+            "slot %s is occupied by consignment %s and has not been cleared"
+            % (slot["code"], slot.get("consignment_code") or slot.get("consignment_id"))
+        )
+    return {
+        "quarantined_by": actor.user_id,
+        "slot_id": slot["id"],
+        "slot_code": slot["code"],
+        "disposal_method": method,
+    }
+
+
+def _validate_destroy(actor, entity, data, lookup):
+    if not entity["data"].get("slot_id"):
+        raise ConflictError("quarantined consignment has no slot assignment")
+    patch = {"destroyed_by": actor.user_id}
+    if data.get("method"):
+        if data["method"] not in DISPOSAL_METHODS:
+            raise ValidationError("method must be one of: " + ",".join(DISPOSAL_METHODS))
+        patch["method"] = data["method"]
+    else:
+        patch["method"] = entity["data"].get("disposal_method")
+    if data.get("reason"):
+        patch["release_reason"] = data["reason"]
+    return patch
+
+
+def _validate_recheck(actor, entity, data, lookup):
+    if not entity["data"].get("slot_id"):
+        raise ConflictError("quarantined consignment has no slot assignment")
+    return {
+        "rechecked_by": actor.user_id,
+        "release_reason": data["reason"],
+    }
 
 
 def _validate_release(actor, entity, data, lookup):
@@ -43,18 +108,32 @@ def trace_downstream(consignments, start_id):
     return result
 
 
-CUSTOM_CREATE = {'consignment': _validate_consignment}
-CUSTOM_TRANSITIONS = {('consignment', 'quarantine'): _validate_quarantine, ('consignment', 'release'): _validate_release}
+CUSTOM_CREATE = {
+    'consignment': _validate_consignment,
+    'slot': _validate_slot,
+}
+CUSTOM_TRANSITIONS = {
+    ('consignment', 'quarantine'): _validate_quarantine,
+    ('consignment', 'release'): _validate_release,
+    ('consignment', 'destroy'): _validate_destroy,
+    ('consignment', 'recheck'): _validate_recheck,
+}
 
 
 class RuleEngine:
-    ALIASES = {'consignments': 'consignment', 'facilities': 'facility'}
-    INITIAL_STATUS = {'consignment': 'declared', 'facility': 'registered'}
-    TRANSITIONS = {'consignment': {'inspect': (('declared',), 'inspected'), 'quarantine': (('inspected',), 'quarantined'), 'release': (('inspected',), 'released'), 'destroy': (('quarantined',), 'destroyed'), 'recheck': (('quarantined',), 'inspected')}, 'facility': {'trace': (('registered',), 'traced')}}
-    CREATE_REQUIRED = {'consignment': ('code', 'origin', 'destination'), 'facility': ('name', 'address')}
-    ACTION_REQUIRED = {('consignment', 'inspect'): ('inspector', 'inspection_result'), ('consignment', 'quarantine'): ('pest_found', 'sample_id'), ('consignment', 'release'): ('pest_found', 'treatment'), ('consignment', 'destroy'): ('method', 'witnessed_by'), ('consignment', 'recheck'): ('sample_id',), ('facility', 'trace'): ('consignment_ids',)}
-    CREATE_ROLES = {'consignment': ('admin', 'inspector'), 'facility': ('admin', 'quarantine')}
+    ALIASES = {'consignments': 'consignment', 'facilities': 'facility', 'slots': 'slot'}
+    INITIAL_STATUS = {'consignment': 'declared', 'facility': 'registered', 'slot': 'available'}
+    TRANSITIONS = {'consignment': {'inspect': (('declared',), 'inspected'), 'quarantine': (('inspected',), 'quarantined'), 'release': (('inspected',), 'released'), 'destroy': (('quarantined',), 'destroyed'), 'recheck': (('quarantined',), 'inspected')}, 'facility': {'trace': (('registered',), 'traced')}, 'slot': {}}
+    CREATE_REQUIRED = {'consignment': ('code', 'origin', 'destination'), 'facility': ('name', 'address'), 'slot': ('code',)}
+    ACTION_REQUIRED = {('consignment', 'inspect'): ('inspector', 'inspection_result'), ('consignment', 'quarantine'): ('pest_found', 'sample_id', 'slot_id', 'disposal_method'), ('consignment', 'release'): ('pest_found', 'treatment'), ('consignment', 'destroy'): ('witnessed_by',), ('consignment', 'recheck'): ('sample_id', 'reason'), ('facility', 'trace'): ('consignment_ids',)}
+    CREATE_ROLES = {'consignment': ('admin', 'inspector'), 'facility': ('admin', 'quarantine'), 'slot': ('admin', 'quarantine')}
     ROLE_ACTIONS = {'inspect': ('admin', 'inspector'), 'quarantine': ('admin', 'quarantine'), 'release': ('admin', 'quarantine'), 'destroy': ('admin', 'quarantine'), 'recheck': ('admin', 'inspector'), 'trace': ('admin', 'quarantine')}
+    # 转处置时占格；处置完成或复检转回普通检疫时释放
+    SLOT_ASSIGN_ACTION = ('consignment', 'quarantine')
+    SLOT_RELEASE_ACTIONS = {
+        'destroy': '处置完成',
+        'recheck': '复检转回普通检疫',
+    }
 
     def normalize_kind(self, kind):
         return self.ALIASES.get(kind, kind)
